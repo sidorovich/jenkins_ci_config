@@ -1,0 +1,49 @@
+#!/bin/bash
+
+# Put this script into /etc/init.d for using phantomhs as service
+
+PHANTOMJS=/usr/bin/phantomjs
+PHANTOMJSARGS="--webdriver=4444"
+PHANTOMJSLOG="/var/log/phantomjs.log"
+PHANTOMJSERRORLOG="/var/log/phantomjs-error.log"
+PID=`ps -ef | grep $PHANTOMJS | grep -v grep | awk '{ print $2 }'`
+
+case "$1" in
+  start)
+    if [ -z "$PID" ]
+    then
+      `$PHANTOMJS $PHANTOMJSARGS > $PHANTOMJSLOG 2> $PHANTOMJSERRORLOG &`
+      echo "PhantomJS is started."
+    else
+      echo "PhantomJS is running. PID: $PID"
+    fi
+    ;;
+  stop)
+    if [ -z "$PID" ]
+    then
+      echo "PhantomJS is not running"
+    else
+      kill $PID
+      echo "PhantomJS stopped."
+    fi
+    ;;
+  restart)
+    $0 stop
+    sleep 2s
+    $0 start
+    ;;
+  status)
+    if [ -z "$PID" ]
+    then
+      echo "PhantomJS is not running"
+    else
+      echo "PhantomJS is running. PID: $PID"
+    fi
+    ;;
+  *)
+
+  echo "Usage: /etc/init.d/phantomjs {start|stop|restart|status}"
+  exit 1
+esac
+
+exit 0
