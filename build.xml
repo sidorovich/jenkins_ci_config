@@ -1,0 +1,377 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="%PROJECT_NAME%" default="build">
+    <taskdef resource="net/sf/antcontrib/antlib.xml" />
+
+    <property name="composer.path" value="/bin/composer" />
+    <property name="composer.json" value="${basedir}/composer.json" />
+    <property name="php" value="/usr/bin/php" />
+    <property name="codecept.phar" value="${basedir}/bin/codecept" />
+    <property name="symfony.console" value="${basedir}/app/console" />
+
+    <property name="project.dir-app" value="app"/>
+    <property name="project.dir-app-cache" value="${project.dir-app}/cache"/>
+    <property name="project.dir-app-logs" value="${project.dir-app}/logs"/>
+
+    <available file="${composer.json}" property="runComposerUpdate" />
+
+    <target name="build" description="Build" depends="-buildInit, -buildDevelop, -buildRelease, -buildMaster, -buildElse" />
+
+    <target name="-buildInit" description="Detect selected platform for building">
+        <condition property="do.Develop">
+            <equals arg1="${platform}" arg2="develop" />
+        </condition>
+
+        <condition property="do.Release">
+            <equals arg1="${platform}" arg2="release" />
+        </condition>
+
+        <condition property="do.Master">
+            <equals arg1="${platform}" arg2="master" />
+        </condition>
+
+        <condition property="do.Else">
+            <not>
+                <or>
+                    <equals arg1="${platform}" arg2="develop" />
+                    <equals arg1="${platform}" arg2="release" />
+                    <equals arg1="${platform}" arg2="master" />
+                </or>
+            </not>
+        </condition>
+    </target>
+
+    <target name="-buildDevelop" if="do.Develop" description="Build develop branch">
+        <antcall target="-firstStep" />
+        <antcall target="-autoTests" />
+        <antcall target="-report" />
+    </target>
+
+    <target name="-buildRelease" if="do.Release" description="Build release branch">
+        <antcall target="-firstStep" />
+        <antcall target="-symfonyCacheWarmupProd" />
+        <antcall target="-propelMigrate" />
+        <antcall target="-mysqlCreateDump" />
+        <antcall target="-autoTests" />
+        <antcall target="-mysqlLoadDump" />
+        <antcall target="-elasticSearch2" />
+        <antcall target="-report" />
+    </target>
+
+    <target name="-buildMaster" if="do.Master" description="Build master branch">
+        <antcall target="-firstStep" />
+        <antcall target="-symfonyCacheWarmupProd" />
+        <antcall target="-propelMigrate" />
+        <antcall target="-mysqlCreateDump" />
+        <antcall target="-autoTests" />
+        <antcall target="-mysqlLoadDump" />
+        <antcall target="-elasticSearch2" />
+        <antcall target="-report" />
+    </target>
+
+    <target name="-buildElse" if="do.Else">
+        <fail>Invalid value of $${platfom} variable. Must be [develop|release|master]</fail>
+    </target>
+
+    <target name="-firstStep" description="Prepare for build">
+        <antcall target="-cleanDirs" />
+        <antcall target="-makeDirs" />
+
+        <antcall target="-composer" />
+        <antcall target="-propelModels" />
+
+        <antcall target="-phpLint" />
+        <antcall target="-twigLint" />
+        <antcall target="-jsHint" />
+    </target>
+
+    <target name="-autoTests">
+        <antcall target="-propelSqlGenerate" />
+        <antcall target="-propelSqlInsert" />
+        <antcall target="-propelLoadFixtures" />
+        <antcall target="-elasticSearch" />
+
+        <antcall target="-phantomJsRestart" />
+
+        <antcall target="-codeceptUnit" />
+        <antcall target="-codeceptAcceptance" />
+        <antcall target="-codeceptApi" />
+    </target>
+
+    <target name="-propelMigrate">
+        <antcall target="-propelMigrateGenerate" />
+        <antcall target="-propelMigrateApply" />
+    </target>
+
+    <target name="-report">
+        <antcall target="-phploc" />
+        <antcall target="-pdepend" />
+        <antcall target="-phpmd" />
+        <antcall target="-phpcs" />
+        <antcall target="-phpcpd" />
+        <antcall target="-phpdox" />
+    </target>
+
+    <target name="-cleanDirs" description="Cleanup build artifacts">
+        <delete dir="${basedir}/build/api"/>
+        <delete dir="${basedir}/build/logs"/>
+        <delete dir="${basedir}/build/pdepend"/>
+        <delete dir="${basedir}/build/phpdox"/>
+        <delete dir="${basedir}/tests/_log" />
+        <delete dir="${basedir}/c3tmp" />
+        <delete includeemptydirs="true">
+            <fileset dir="${basedir}">
+                <include name="${project.dir-app-cache}/**"/>
+                <exclude name="${project.dir-app-cache}/.gitkeep"/>
+                <exclude name="${project.dir-app-cache}/.gitignore"/>
+                <include name="${project.dir-app-logs}/*"/>
+                <exclude name="${project.dir-app-logs}/.gitkeep"/>
+                <exclude name="${project.dir-app-logs}/.gitignore"/>
+            </fileset>
+        </delete>
+    </target>
+
+    <target name="-makeDirs" description="Prepare for build">
+        <mkdir dir="${basedir}/build/api"/>
+        <mkdir dir="${basedir}/build/logs"/>
+        <mkdir dir="${basedir}/build/pdepend"/>
+        <mkdir dir="${basedir}/build/phpdox"/>
+        <mkdir dir="${basedir}/tests/_log" />
+        <mkdir dir="${basedir}/c3tmp" />
+    </target>
+
+    <target name="-phantomJsRestart" description="Restart PhantomJS service for drop cache with static files">
+        <exec executable="sudo">
+            <arg value="service" />
+            <arg value="phantomjs" />
+            <arg value="restart" />
+        </exec>
+    </target>
+
+    <target name="-symfonyCacheWarmupProd" description="Warms up an empty cache for prod environment">
+        <exec executable="${symfony.console}" failonerror="true">
+            <arg value="cache:warmup" />
+            <arg value="--env=prod" />
+            <arg value="--no-debug" />
+            <arg value="--no-interaction" />
+        </exec>
+    </target>
+
+    <target name="-phpLint" description="Perform syntax check of sourcecode files">
+        <apply executable="php" failonerror="true">
+            <arg value="-l" />
+
+            <fileset dir="${basedir}/src">
+                <include name="**/*.php" />
+                <modified />
+            </fileset>
+
+            <fileset dir="${basedir}/tests">
+                <include name="**/*.php" />
+                <modified />
+            </fileset>
+        </apply>
+    </target>
+
+    <target name="-twigLint" description="Perform syntax check of Twig templates">
+        <apply executable="${symfony.console}" failonerror="true">
+            <arg value="twig:lint" />
+
+            <fileset dir="${basedir}/app">
+                <include name="**/*.twig" />
+                <modified />
+            </fileset>
+
+            <fileset dir="${basedir}/src">
+                <include name="**/*.twig" />
+                <modified />
+            </fileset>
+        </apply>
+    </target>
+
+    <target name="-jsHint" description="Perform syntax check of JavaScript">
+        <apply executable="jshint">
+
+            <fileset dir="${basedir}/web/resources">
+                <include name="**/*.js" />
+                <exclude name="**/*.min.js" />
+                <modified />
+            </fileset>
+
+            <fileset dir="${basedir}/src">
+                <include name="**/*.js" />
+                <exclude name="**/*.min.js" />
+                <modified />
+            </fileset>
+        </apply>
+    </target>
+
+    <target name="-phploc" description="Measure project size using PHPLOC">
+        <exec executable="phploc">
+            <arg value="--count-tests" />
+            <arg value="--log-csv" />
+            <arg value="${basedir}/build/logs/phploc.csv" />
+            <arg path="${basedir}/src" />
+        </exec>
+    </target>
+
+    <target name="-pdepend" description="Calculate software metrics using PHP_Depend">
+        <exec executable="pdepend">
+            <arg value="--jdepend-xml=${basedir}/build/logs/jdepend.xml" />
+            <arg value="--jdepend-chart=${basedir}/build/pdepend/dependencies.svg" />
+            <arg value="--overview-pyramid=${basedir}/build/pdepend/overview-pyramid.svg" />
+            <arg path="${basedir}/src" />
+        </exec>
+    </target>
+
+    <target name="-phpmd" description="Perform project mess detection using PHPMD creating a log file for the continuous integration server">
+        <exec executable="phpmd">
+            <arg path="${basedir}/src" />
+            <arg value="xml" />
+            <arg value="${basedir}/phpmd.xml" />
+            <arg value="--exclude" />
+            <arg value="Tests/,om/,map/" />
+            <arg value="--reportfile" />
+            <arg value="${basedir}/build/logs/pmd.xml" />
+        </exec>
+    </target>
+
+    <target name="-phpcs" description="Find coding standard violations using PHP_CodeSniffer creating a log file for the continuous integration server">
+        <exec executable="phpcs">
+            <arg value="--report=checkstyle" />
+            <arg value="--report-file=${basedir}/build/logs/checkstyle.xml" />
+            <arg value="--standard=PSR2" />
+            <arg value="--encoding=utf-8" />
+            <arg value="--ignore=*/vendor/*,*/app/*,*/tests/*,*/om/*,*/map/*,*Trait.php,*Test.php" />
+            <arg value="--extensions=php" />
+            <arg path="${basedir}/src" />
+        </exec>
+    </target>
+
+    <target name="-phpcpd" description="Find duplicate code using PHPCPD">
+        <exec executable="phpcpd">
+            <arg value="--log-pmd=${basedir}/build/logs/pmd-cpd.xml" />
+            <arg value="--exclude=om" />
+            <arg value="--exclude=map" />
+            <arg path="${basedir}/src" />
+        </exec>
+    </target>
+
+    <target name="-phpdox" description="Generate API documentation using phpDox">
+        <exec executable="phpdox"/>
+    </target>
+
+    <target name="-codeceptUnit" description="Run unit tests with Codeception">
+        <exec executable="${codecept.phar}" failonerror="true">
+            <arg value="run" />
+            <arg value="unit" />
+            <arg value="--coverage" />
+            <arg value="--xml" />
+            <arg value="--html" />
+        </exec>
+    </target>
+
+    <target name="-codeceptAcceptance" description="Run acceptance tests with Codeception">
+        <exec executable="${codecept.phar}" failonerror="true">
+            <arg value="run" />
+            <arg value="acceptance" />
+        </exec>
+    </target>
+
+    <target name="-codeceptApi" description="Run fuctional tests for checking API for ToolBar">
+        <exec executable="${codecept.phar}" failonerror="true">
+            <arg value="run" />
+            <arg value="api" />
+        </exec>
+    </target>
+
+    <target name="-composer" description="Run composer install or update">
+        <if>
+            <isset property="runComposerUpdate" />
+            <then>
+                <antcall target="-composerUpdate" />
+            </then>
+            <else>
+                <antcall target="-composerInstall" />
+            </else>
+        </if>
+    </target>
+
+    <target name="-composerUpdate" if="runComposerUpdate" description="Run composer update before each build">
+        <exec executable="${composer.path}" failonerror="true">
+            <arg value="update" />
+        </exec>
+    </target>
+
+    <target name="-composerInstall" unless="runComposerUpdate" description="Run composer install on first build">
+        <exec executable="${composer.path}" failonerror="true">
+            <arg value="install" />
+        </exec>
+    </target>
+
+    <target name="-propelModels" description="Generate Propel models">
+        <exec executable="${symfony.console}" failonerror="true">
+            <arg value="propel:model:build" />
+        </exec>
+    </target>
+
+    <target name="-propelSqlGenerate" description="Generate Propel migration">
+        <exec executable="${symfony.console}" failonerror="true">
+            <arg value="propel:sql:build" />
+        </exec>
+    </target>
+
+    <target name="-propelSqlInsert" description="Migrate database with generated Propel migration data">
+        <exec executable="${symfony.console}" failonerror="true">
+            <arg value="propel:sql:insert" />
+            <arg value="--force" />
+        </exec>
+    </target>
+
+    <target name="-propelLoadFixtures" description="Load Propel fixtures into database for test">
+        <exec executable="${symfony.console}" failonerror="true">
+            <arg value="propel:fixtures:load" />
+            <arg value="--dir=app/propel/fixtures-jenkins/" />
+        </exec>
+    </target>
+
+    <target name="-propelMigrateGenerate" description="Build migration diff for Propel migrate">
+        <exec executable="${symfony.console}" failonerror="true">
+            <arg value="propel:migration:generate-diff" />
+        </exec>
+    </target>
+
+    <target name="-propelMigrateApply" description="Apply Propel migration">
+        <exec executable="${symfony.console}" failonerror="true">
+            <arg value="propel:migration:migrate" />
+        </exec>
+    </target>
+
+    <target name="-elasticSearch" description="Populate coupons data into ElasticSearch indicies">
+        <exec executable="${symfony.console}" failonerror="true">
+            <arg value="fos:elastica:populate" />
+        </exec>
+    </target>
+
+    <target name="-elasticSearch2" description="Populate coupons data into ElasticSearch indicies">
+        <exec executable="${symfony.console}" failonerror="true">
+            <arg value="fos:elastica:populate" />
+        </exec>
+    </target>
+
+    <target name="-mysqlCreateDump" description="Dump real data from DB into dump before autotests">
+        <exec executable="mysqldump" output="${basedir}/build/mysqldump.sql" failonerror="true">
+            <arg value="-u${mysqlUser}" />
+            <arg value="-p${mysqlPassword}" />
+            <arg value="${mysqlDatabase}" />
+        </exec>
+    </target>
+
+    <target name="-mysqlLoadDump" description="Restore real data from dump into DB after autotests">
+        <exec executable="mysql" input="${basedir}/build/mysqldump.sql" failonerror="true">
+            <arg value="-u${mysqlUser}" />
+            <arg value="-p${mysqlPassword}" />
+            <arg value="${mysqlDatabase}" />
+        </exec>
+    </target>
+
+</project>
